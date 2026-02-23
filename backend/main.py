@@ -70,25 +70,25 @@ async def lifespan(app: FastAPI):
     """
 
     # ---------- STARTUP ----------
-    logger.info("🚀 Starting up — loading ML models...")
+    logger.info("Starting up — loading ML models...")
 
     # 1. Load the SentenceTransformer (converts text → 384-dim vectors).
     #    The first time you run this it will download the model weights
     #    (~80 MB) from HuggingFace. After that it's cached locally.
     app.state.embedder = SentenceTransformer(EMBEDDING_MODEL_NAME)
-    logger.info("✅ SentenceTransformer loaded.")
+    logger.info("SentenceTransformer loaded.")
 
     # 2. Load the scikit-learn classifier from the .pkl file.
     #    joblib.load() reconstructs the Python object that was saved
     #    during training (your Logistic Regression pipeline).
     if not os.path.exists(MODEL_PATH):
-        logger.error(f"❌ Model file not found at: {MODEL_PATH}")
+        logger.error(f"Model file not found at: {MODEL_PATH}")
         raise FileNotFoundError(
             f"Cannot find the model file at '{MODEL_PATH}'. "
             "Make sure 'legal_risk_classifier.pkl' is in the backend/ folder."
         )
     app.state.classifier = joblib.load(MODEL_PATH)
-    logger.info("✅ Classifier (.pkl) loaded.")
+    logger.info("Classifier (.pkl) loaded.")
 
     # 3. Load the spaCy English language model for sentence segmentation.
     #    'en_core_web_sm' is a small, fast model that includes a
@@ -97,20 +97,20 @@ async def lifespan(app: FastAPI):
         app.state.nlp = spacy.load("en_core_web_sm")
     except OSError:
         logger.error(
-            "❌ spaCy model 'en_core_web_sm' not found. "
+            "spaCy model 'en_core_web_sm' not found. "
             "Run: python -m spacy download en_core_web_sm"
         )
         raise
-    logger.info("✅ spaCy model loaded.")
+    logger.info("spaCy model loaded.")
 
-    logger.info("🟢 All models loaded successfully — server is ready!")
+    logger.info("All models loaded successfully — server is ready!")
 
     # 'yield' hands control over to FastAPI so it can start serving.
     yield
 
     # ---------- SHUTDOWN ----------
     # Nothing to clean up here, but you could close DB connections etc.
-    logger.info("👋 Shutting down — goodbye!")
+    logger.info("Shutting down — goodbye!")
 
 
 # =============================================================
@@ -171,10 +171,10 @@ def extract_text_from_pdf(file_bytes: bytes) -> str:
             if text:
                 pages_text.append(text)
             else:
-                logger.warning(f"⚠️  Page {page_num} returned no text (might be scanned/image).")
+                logger.warning(f"Page {page_num} returned no text (might be scanned/image).")
         return "\n".join(pages_text)
     except Exception as e:
-        logger.error(f"❌ Failed to read PDF: {e}")
+        logger.error(f"Failed to read PDF: {e}")
         raise HTTPException(
             status_code=400,
             detail=f"Could not parse the uploaded PDF. It may be corrupted or encrypted. Error: {str(e)}",
@@ -190,7 +190,7 @@ def extract_text_from_txt(file_bytes: bytes) -> str:
     try:
         return file_bytes.decode("utf-8")
     except UnicodeDecodeError:
-        logger.warning("⚠️  UTF-8 decode failed, falling back to Latin-1.")
+        logger.warning("UTF-8 decode failed, falling back to Latin-1.")
         return file_bytes.decode("latin-1")
 
 
@@ -235,7 +235,7 @@ async def health_check():
 @app.post("/analyze")
 async def analyze_contract(file: UploadFile = File(...)):
     """
-    🔍 MAIN ENDPOINT — Upload a contract and get clause-level risk analysis.
+    MAIN ENDPOINT — Upload a contract and get clause-level risk analysis.
 
     Pipeline:
       1. Validate the file extension (.pdf or .txt only).
@@ -312,7 +312,7 @@ async def analyze_contract(file: UploadFile = File(...)):
             ),
         )
 
-    logger.info(f"📄 Extracted {len(raw_text)} characters from '{filename}'.")
+    logger.info(f"Extracted {len(raw_text)} characters from '{filename}'.")
 
     # ----- STEP 4: Segment text into clauses using spaCy -----
     clauses = segment_into_clauses(raw_text, app.state.nlp)
@@ -323,7 +323,7 @@ async def analyze_contract(file: UploadFile = File(...)):
             detail="The file was readable but no meaningful clauses could be extracted.",
         )
 
-    logger.info(f"📝 Segmented into {len(clauses)} clauses.")
+    logger.info(f"Segmented into {len(clauses)} clauses.")
 
     # ----- STEP 5 & 6: Encode clauses and predict risk -----
     try:
@@ -336,7 +336,7 @@ async def analyze_contract(file: UploadFile = File(...)):
         # predictions is a NumPy array of 0s and 1s, one per clause.
         predictions = app.state.classifier.predict(embeddings)
     except Exception as e:
-        logger.error(f"❌ Inference failed: {e}")
+        logger.error(f"Inference failed: {e}")
         raise HTTPException(
             status_code=500,
             detail=f"An error occurred during analysis: {str(e)}",
@@ -354,7 +354,7 @@ async def analyze_contract(file: UploadFile = File(...)):
         })
 
     logger.info(
-        f"✅ Analysis complete for '{filename}': "
+        f"Analysis complete for '{filename}': "
         f"{sum(1 for r in results if r['risk_label'] == 1)} risky / {len(results)} total clauses."
     )
 
