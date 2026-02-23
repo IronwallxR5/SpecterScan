@@ -1,0 +1,23 @@
+# ==========================================
+# SpecterScan Backend — Python Dependencies
+# ==========================================
+# Install everything with:  pip install -r requirements.txt
+# Then download the spaCy model: python -m spacy download en_core_web_sm
+
+# --- Web Framework & Server ---
+fastapi
+uvicorn[standard]
+
+# --- File Upload Support ---
+# FastAPI needs this to parse multipart/form-data (file uploads)
+python-multipart
+
+# --- PDF Text Extraction ---
+PyPDF2
+
+# --- NLP (Sentence Segmentation) ---
+spacy
+
+# --- Machine Learning ---
+scikit-learn
+sentence-transformers
