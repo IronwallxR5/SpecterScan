@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import './App.css';
 import { UploadView } from './components/UploadView/UploadView';
+import { ResultsView } from './components/ResultsView/ResultsView';
 
 function App() {
   const [currentView, setCurrentView] = useState<'upload' | 'results'>('upload');
@@ -16,7 +17,7 @@ function App() {
       {currentView === 'upload' ? (
         <UploadView onAnalyze={handleAnalyze} />
       ) : (
-        <div>Results View Placeholder (File: {fileName})</div>
+        <ResultsView fileName={fileName} onBack={() => setCurrentView('upload')} />
       )}
     </>
   );
