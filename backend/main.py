@@ -99,7 +99,7 @@ app.add_middleware(
 )
 
 
-=====================================
+# =====================================
 
 def extract_text_from_pdf(file_bytes: bytes) -> str:
     """
@@ -168,7 +168,7 @@ def segment_into_clauses(text: str, nlp) -> list[str]:
     return clauses
 
 
-=================================================
+# =================================================
 
 @app.get("/health")
 async def health_check():
