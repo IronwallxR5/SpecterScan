@@ -43,6 +43,7 @@
 
 /* Card Styles */
 .card {
+  flex-shrink: 0;
   background-color: var(--color-surface);
   border-radius: var(--radius-lg);
   border: 1px solid var(--color-border);
@@ -106,7 +107,8 @@
   letter-spacing: 0.05em;
 }
 
-.iconHigh, .iconMedium {
+.iconHigh,
+.iconMedium {
   margin-top: -1px;
 }
 

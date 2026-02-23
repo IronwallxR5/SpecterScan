@@ -1,32 +1,29 @@
-import { ClauseCard, type ClauseData } from './ClauseCard';
+import { ClauseCard } from './ClauseCard';
 import styles from './ClausesList.module.css';
+import type { ClauseResult } from '../../App';
 
-const mockClauses: ClauseData[] = [
-  {
-    id: 'c1',
-    snippet: 'Receiving Party shall be liable for any punitive damages and consequential damages resulting from any breach, regardless of intent.',
-    riskLevel: 'High',
-    riskScore: 0.92
-  },
-  {
-    id: 'c2',
-    snippet: 'Either party may terminate this Agreement at any time upon three (3) days written notice to the other party.',
-    riskLevel: 'Medium',
-    riskScore: 0.68
-  }
-];
+interface ClausesListProps {
+  results: ClauseResult[];
+}
 
-export function ClausesList() {
+export function ClausesList({ results }: ClausesListProps) {
+  // Only show the risky clauses in the side panel
+  const flaggedClauses = results.filter((clause) => clause.risk_label === 1);
+
   return (
     <div className={styles.listContainer}>
       <div className={styles.listHeader}>
-        <span className={styles.count}>{mockClauses.length} Flagged Clauses</span>
-        <button className={styles.filterBtn}>Filter</button>
+        <span className={styles.count}>{flaggedClauses.length} Flagged Clauses</span>
+        <button className={styles.filterBtn}></button>
       </div>
       <div className={styles.cardsWrapper}>
-        {mockClauses.map(clause => (
-          <ClauseCard key={clause.id} clause={clause} />
-        ))}
+        {flaggedClauses.length === 0 ? (
+          <p className={styles.emptyState}>No risky clauses detected!</p>
+        ) : (
+          flaggedClauses.map((clause) => (
+            <ClauseCard key={clause.clause_index} clause={clause} />
+          ))
+        )}
       </div>
     </div>
   );

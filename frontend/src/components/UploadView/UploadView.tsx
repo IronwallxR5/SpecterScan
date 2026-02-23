@@ -1,28 +1,32 @@
 import React, { useState, useRef } from 'react';
-import { UploadCloud, FileText, CheckCircle } from 'lucide-react';
+import { UploadCloud, FileText, CheckCircle, Loader2 } from 'lucide-react';
 import styles from './UploadView.module.css';
 
 interface UploadViewProps {
-  onAnalyze: (fileName: string) => void;
+  onAnalyze: (file: File) => void;
+  isAnalyzing: boolean;
 }
 
-export function UploadView({ onAnalyze }: UploadViewProps) {
+export function UploadView({ onAnalyze, isAnalyzing }: UploadViewProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
+    if (isAnalyzing) return;
     setIsDragging(true);
   };
 
   const handleDragLeave = (e: React.DragEvent) => {
     e.preventDefault();
+    if (isAnalyzing) return;
     setIsDragging(false);
   };
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
+    if (isAnalyzing) return;
     setIsDragging(false);
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       setFile(e.dataTransfer.files[0]);
@@ -30,6 +34,7 @@ export function UploadView({ onAnalyze }: UploadViewProps) {
   };
 
   const handleClick = () => {
+    if (isAnalyzing) return;
     fileInputRef.current?.click();
   };
 
@@ -50,21 +55,22 @@ export function UploadView({ onAnalyze }: UploadViewProps) {
       </header>
 
       <main className={styles.main}>
-        <div 
-          className={`${styles.dropzone} ${isDragging ? styles.dragging : ''} ${file ? styles.hasFile : ''}`}
+        <div
+          className={`${styles.dropzone} ${isDragging ? styles.dragging : ''} ${file ? styles.hasFile : ''} ${isAnalyzing ? styles.analyzing : ''}`}
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
           onClick={handleClick}
         >
-          <input 
-            type="file" 
-            ref={fileInputRef} 
-            onChange={handleFileChange} 
-            accept=".pdf,.txt" 
-            style={{ display: 'none' }} 
+          <input
+            type="file"
+            ref={fileInputRef}
+            onChange={handleFileChange}
+            accept=".pdf,.txt"
+            style={{ display: 'none' }}
+            disabled={isAnalyzing}
           />
-          
+
           <div className={styles.dropContent}>
             {file ? (
               <div className={styles.fileInfo}>
@@ -88,12 +94,19 @@ export function UploadView({ onAnalyze }: UploadViewProps) {
           </div>
         </div>
 
-        <button 
-          className={styles.analyzeBtn} 
-          disabled={!file}
-          onClick={() => file ? onAnalyze(file.name) : undefined}
+        <button
+          className={styles.analyzeBtn}
+          disabled={!file || isAnalyzing}
+          onClick={() => file ? onAnalyze(file) : undefined}
         >
-          Analyze Document
+          {isAnalyzing ? (
+            <>
+              <Loader2 className={styles.spinner} size={20} />
+              Analyzing...
+            </>
+          ) : (
+            'Analyze Document'
+          )}
         </button>
       </main>
     </div>

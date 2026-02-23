@@ -1,65 +1,33 @@
-"""
-============================================================
-  SpecterScan — Intelligent Contract Risk Analysis Backend
-  Milestone 1: Clause-Level Risk Classification API
-============================================================
-
-This is the main (and only) file for the FastAPI backend.
-It does the following:
-  1. Loads a pre-trained ML model + SentenceTransformer at startup.
-  2. Accepts PDF or TXT contract uploads via a POST endpoint.
-  3. Extracts text, splits it into clauses using spaCy.
-  4. Classifies each clause as Normal (0) or Risky (1).
-  5. Returns the results as a JSON array.
-"""
-
-# =============================================================
-# IMPORTS — everything the backend needs
-# =============================================================
-
 import os
 import io
 import logging
 from contextlib import asynccontextmanager
 
-import joblib                       # to load the saved .pkl model
-import spacy                        # NLP library for sentence segmentation
-from PyPDF2 import PdfReader        # to extract text from PDF files
-from sentence_transformers import SentenceTransformer  # text → 384-d vectors
+import joblib                     
+import spacy                   
+from PyPDF2 import PdfReader       
+from sentence_transformers import SentenceTransformer  
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 
-# =============================================================
-# CONFIGURATION — constants you can tweak
-# =============================================================
-
-# Path to your saved scikit-learn model (relative to this file).
-# If you renamed the file, update this string.
 MODEL_PATH = os.path.join(os.path.dirname(__file__), "legal_risk_classifier.pkl")
 
-# The SentenceTransformer model used during training.
-# This MUST match whatever model you used when creating the .pkl file.
+
 EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 
-# Human-readable labels that map to the model's numeric predictions.
+
 RISK_LABELS = {
     0: "Normal/Compliant",
     1: "Risky/Potential Issue",
 }
 
-# Set up basic logging so you can see what's happening in the terminal.
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("specterscan")
 
 
-# =============================================================
-# LIFESPAN — load heavy resources ONCE at server startup
-# =============================================================
-# Why a lifespan?  Loading the SentenceTransformer (~80 MB) and spaCy
-# model on every request would be painfully slow.  By loading them here,
-# they live in memory for the entire lifetime of the server, and every
-# incoming request reuses the same objects.
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -69,18 +37,14 @@ async def lifespan(app: FastAPI):
     (the code below 'yield').
     """
 
-    # ---------- STARTUP ----------
+
     logger.info("Starting up — loading ML models...")
 
-    # 1. Load the SentenceTransformer (converts text → 384-dim vectors).
-    #    The first time you run this it will download the model weights
-    #    (~80 MB) from HuggingFace. After that it's cached locally.
+
     app.state.embedder = SentenceTransformer(EMBEDDING_MODEL_NAME)
     logger.info("SentenceTransformer loaded.")
 
-    # 2. Load the scikit-learn classifier from the .pkl file.
-    #    joblib.load() reconstructs the Python object that was saved
-    #    during training (your Logistic Regression pipeline).
+
     if not os.path.exists(MODEL_PATH):
         logger.error(f"Model file not found at: {MODEL_PATH}")
         raise FileNotFoundError(
@@ -90,9 +54,6 @@ async def lifespan(app: FastAPI):
     app.state.classifier = joblib.load(MODEL_PATH)
     logger.info("Classifier (.pkl) loaded.")
 
-    # 3. Load the spaCy English language model for sentence segmentation.
-    #    'en_core_web_sm' is a small, fast model that includes a
-    #    sentence boundary detector — exactly what we need.
     try:
         app.state.nlp = spacy.load("en_core_web_sm")
     except OSError:
@@ -105,17 +66,13 @@ async def lifespan(app: FastAPI):
 
     logger.info("All models loaded successfully — server is ready!")
 
-    # 'yield' hands control over to FastAPI so it can start serving.
+
     yield
 
-    # ---------- SHUTDOWN ----------
-    # Nothing to clean up here, but you could close DB connections etc.
+
     logger.info("Shutting down — goodbye!")
 
 
-# =============================================================
-# APP INITIALIZATION
-# =============================================================
 
 app = FastAPI(
     title="SpecterScan API",
@@ -125,31 +82,23 @@ app = FastAPI(
 )
 
 
-# =============================================================
-# CORS MIDDLEWARE — so your React frontend can talk to this API
-# =============================================================
-# Browsers block requests from one origin (e.g., localhost:3000)
-# to a different origin (e.g., localhost:8000) unless the server
-# explicitly allows it via CORS headers.  We whitelist the common
-# React dev-server ports here.
+
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:3000",    # Create React App default
-        "http://localhost:5173",    # Vite default
+        "http://localhost:3000",  
+        "http://localhost:5173",    
         "http://127.0.0.1:3000",
         "http://127.0.0.1:5173",
     ],
     allow_credentials=True,
-    allow_methods=["*"],            # allow GET, POST, PUT, DELETE, etc.
-    allow_headers=["*"],            # allow any request headers
+    allow_methods=["*"],           
+    allow_headers=["*"],            
 )
 
 
-# =============================================================
-# HELPER FUNCTIONS
-# =============================================================
+=====================================
 
 def extract_text_from_pdf(file_bytes: bytes) -> str:
     """
@@ -212,16 +161,13 @@ def segment_into_clauses(text: str, nlp) -> list[str]:
     clauses = []
     for sent in doc.sents:
         clause = sent.text.strip()
-        # Skip very short "sentences" — they're usually artifacts
-        # like lone numbers, bullet markers, or stray punctuation.
+    
         if len(clause) >= 5:
             clauses.append(clause)
     return clauses
 
 
-# =============================================================
-# ENDPOINTS
-# =============================================================
+=================================================
 
 @app.get("/health")
 async def health_check():
@@ -233,7 +179,7 @@ async def health_check():
 
 
 @app.post("/analyze")
-async def analyze_contract(file: UploadFile = File(...)):
+def analyze_contract(file: UploadFile = File(...)):
     """
     MAIN ENDPOINT — Upload a contract and get clause-level risk analysis.
 
@@ -267,8 +213,6 @@ async def analyze_contract(file: UploadFile = File(...)):
       }
     """
 
-    # ----- STEP 1: Validate the file extension -----
-    # We only support PDF and TXT.  Anything else gets rejected immediately.
     filename = file.filename or "unknown"
     extension = os.path.splitext(filename)[1].lower()
 
@@ -281,9 +225,9 @@ async def analyze_contract(file: UploadFile = File(...)):
             ),
         )
 
-    # ----- STEP 2: Read the raw bytes from the uploaded file -----
     try:
-        file_bytes = await file.read()
+        # Since this is no longer an async function, we can just use file.file.read()
+        file_bytes = file.file.read()
     except Exception as e:
         raise HTTPException(
             status_code=400,
@@ -296,13 +240,13 @@ async def analyze_contract(file: UploadFile = File(...)):
             detail="The uploaded file is empty (0 bytes).",
         )
 
-    # ----- STEP 3: Extract text based on file type -----
+
     if extension == ".pdf":
         raw_text = extract_text_from_pdf(file_bytes)
     else:
         raw_text = extract_text_from_txt(file_bytes)
 
-    # Check that we actually got some meaningful text
+ 
     if not raw_text or not raw_text.strip():
         raise HTTPException(
             status_code=400,
@@ -314,7 +258,6 @@ async def analyze_contract(file: UploadFile = File(...)):
 
     logger.info(f"Extracted {len(raw_text)} characters from '{filename}'.")
 
-    # ----- STEP 4: Segment text into clauses using spaCy -----
     clauses = segment_into_clauses(raw_text, app.state.nlp)
 
     if not clauses:
@@ -325,15 +268,12 @@ async def analyze_contract(file: UploadFile = File(...)):
 
     logger.info(f"Segmented into {len(clauses)} clauses.")
 
-    # ----- STEP 5 & 6: Encode clauses and predict risk -----
+
     try:
-        # Encode ALL clauses at once (batch mode) — this is much faster
-        # than encoding one-by-one because the model can leverage
-        # parallelism on CPU/GPU.
+
         embeddings = app.state.embedder.encode(clauses, show_progress_bar=False)
 
-        # Run the classifier on all embeddings at once.
-        # predictions is a NumPy array of 0s and 1s, one per clause.
+ 
         predictions = app.state.classifier.predict(embeddings)
     except Exception as e:
         logger.error(f"Inference failed: {e}")
@@ -342,12 +282,12 @@ async def analyze_contract(file: UploadFile = File(...)):
             detail=f"An error occurred during analysis: {str(e)}",
         )
 
-    # ----- STEP 7: Build the response JSON -----
+ 
     results = []
     for i, (clause_text, prediction) in enumerate(zip(clauses, predictions)):
-        label = int(prediction)     # convert from numpy int to Python int
+        label = int(prediction)    
         results.append({
-            "clause_index": i + 1,  # 1-based index for readability
+            "clause_index": i + 1, 
             "clause_text": clause_text,
             "risk_label": label,
             "risk_category": RISK_LABELS.get(label, "Unknown"),
@@ -365,15 +305,7 @@ async def analyze_contract(file: UploadFile = File(...)):
     }
 
 
-# =============================================================
-# RUN THE SERVER (for development only)
-# =============================================================
-# You can start the server two ways:
-#   Option A (recommended):  uvicorn main:app --reload
-#   Option B (quick & dirty): python main.py
-#
-# Option A is better because --reload auto-restarts the server
-# whenever you save changes to this file.
+
 
 if __name__ == "__main__":
     import uvicorn

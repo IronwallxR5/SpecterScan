@@ -1,43 +1,30 @@
-import { AlertTriangle, AlertCircle } from 'lucide-react';
+import { AlertTriangle } from 'lucide-react';
 import styles from './ClausesList.module.css';
-
-export interface ClauseData {
-  id: string;
-  snippet: string;
-  riskLevel: 'High' | 'Medium' | 'Low';
-  riskScore: number;
-}
+import type { ClauseResult } from '../../App';
 
 interface ClauseCardProps {
-  clause: ClauseData;
+  clause: ClauseResult;
 }
 
 export function ClauseCard({ clause }: ClauseCardProps) {
-  const getRiskIcon = () => {
-    switch (clause.riskLevel) {
-      case 'High':
-        return <AlertTriangle size={16} className={styles.iconHigh} />;
-      case 'Medium':
-        return <AlertCircle size={16} className={styles.iconMedium} />;
-      default:
-        return null;
-    }
-  };
+  // Currently the API only returns label 0 or 1, without a probability score.
+  // We'll treat all 1s as "High" risk for this UI step.
+  const riskLevel = 'High';
 
   return (
-    <div className={`${styles.card} ${styles[`risk${clause.riskLevel}`]}`}>
+    <div className={`${styles.card} ${styles[`risk${riskLevel}`]}`}>
       <div className={styles.cardHeader}>
         <div className={styles.riskBadgeWrapper}>
-          {getRiskIcon()}
-          <span className={styles.riskLabel}>{clause.riskLevel} Risk</span>
+          <AlertTriangle size={16} className={styles.iconHigh} />
+          <span className={styles.riskLabel}>{clause.risk_category}</span>
         </div>
         <div className={styles.scoreWrapper}>
-          <span className={styles.scoreLabel}>Score</span>
-          <span className={styles.scoreValue}>{clause.riskScore.toFixed(2)}</span>
+          <span className={styles.scoreLabel}>Clause</span>
+          <span className={styles.scoreValue}>#{clause.clause_index}</span>
         </div>
       </div>
       <div className={styles.cardBody}>
-        <p className={styles.snippet}>"{clause.snippet}"</p>
+        <p className={styles.snippet}>"{clause.clause_text}"</p>
       </div>
       <div className={styles.cardFooter}>
         <button className={styles.actionBtn}>Review Section</button>

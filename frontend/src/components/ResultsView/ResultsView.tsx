@@ -2,13 +2,21 @@ import { ArrowLeft } from 'lucide-react';
 import styles from './ResultsView.module.css';
 import { DocumentViewer } from '../DocumentViewer/DocumentViewer';
 import { ClausesList } from '../ClausesList/ClausesList';
+import type { AnalysisResponse } from '../../App';
 
 interface ResultsViewProps {
-  fileName: string;
+  data: AnalysisResponse | null;
   onBack: () => void;
 }
 
-export function ResultsView({ fileName, onBack }: ResultsViewProps) {
+export function ResultsView({ data, onBack }: ResultsViewProps) {
+  if (!data) return null;
+
+  // Calculate a simple risk score (e.g., percentage of risky clauses)
+  const totalClauses = data.total_clauses;
+  const riskyClauses = data.results.filter((c) => c.risk_label === 1).length;
+  const totalRiskScore = totalClauses > 0 ? (riskyClauses / totalClauses).toFixed(2) : '0.00';
+
   return (
     <div className={styles.container}>
       <header className={styles.header}>
@@ -18,13 +26,13 @@ export function ResultsView({ fileName, onBack }: ResultsViewProps) {
           </button>
           <div className={styles.fileInfo}>
             <h2>Analysis Results</h2>
-            <p className={styles.fileName}>{fileName}</p>
+            <p className={styles.fileName}>{data.filename}</p>
           </div>
         </div>
         <div className={styles.headerRight}>
           <div className={styles.summaryBadge}>
             <span className={styles.badgeLabel}>Total Risk Score</span>
-            <span className={styles.badgeValue}>0.87</span>
+            <span className={styles.badgeValue}>{totalRiskScore}</span>
           </div>
         </div>
       </header>
@@ -32,12 +40,12 @@ export function ResultsView({ fileName, onBack }: ResultsViewProps) {
       <main className={styles.splitLayout}>
         <section className={styles.leftColumn}>
           <h3 className={styles.columnTitle}>Document Content</h3>
-          <DocumentViewer />
+          <DocumentViewer results={data.results} />
         </section>
-        
+
         <section className={styles.rightColumn}>
           <h3 className={styles.columnTitle}>Flagged Clauses List</h3>
-          <ClausesList />
+          <ClausesList results={data.results} />
         </section>
       </main>
     </div>
