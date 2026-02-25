@@ -34,7 +34,7 @@ logger = logging.getLogger("specterscan")
 # ── Page Config ──────────────────────────────────
 st.set_page_config(
     page_title="SpecterScan",
-    page_icon="🔍",
+    page_icon="",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
@@ -72,12 +72,7 @@ def inject_css():
         margin-bottom: 0.5rem;
     }
     .specter-logo-icon {
-        width: 28px;
-        height: 28px;
-        background: linear-gradient(135deg, #2563eb, #60a5fa);
-        border-radius: 6px;
-        transform: rotate(45deg);
-        display: inline-block;
+        display: none;
     }
     .specter-logo h1 {
         font-size: 2rem;
@@ -590,7 +585,7 @@ def extract_text_from_csv(file_bytes: bytes) -> str:
         if val:
             clauses.append(val)
 
-    return "\n".join(clauses)
+    return clauses  # return list of clauses directly for CSV
 
 
 def segment_into_clauses(text: str, nlp) -> list[str]:
@@ -604,19 +599,21 @@ def analyze_document(file_bytes: bytes, filename: str, embedder, classifier, nlp
 
     if ext == ".pdf":
         raw_text = extract_text_from_pdf(file_bytes)
+        clauses = segment_into_clauses(raw_text, nlp)
     elif ext == ".txt":
         raw_text = extract_text_from_txt(file_bytes)
+        clauses = segment_into_clauses(raw_text, nlp)
     elif ext == ".csv":
-        raw_text = extract_text_from_csv(file_bytes)
+        # CSV rows are already individual clauses — skip spaCy segmentation
+        clauses = extract_text_from_csv(file_bytes)
     else:
         raise ValueError(f"Unsupported file type: '{ext}'. Upload .pdf, .txt, or .csv.")
 
-    if not raw_text or not raw_text.strip():
-        raise ValueError("No readable text could be extracted from the file.")
-
-    clauses = segment_into_clauses(raw_text, nlp)
     if not clauses:
         raise ValueError("No meaningful clauses could be extracted.")
+
+    # Clean clause text: collapse whitespace and newlines
+    clauses = [" ".join(c.split()) for c in clauses if len(c.strip()) >= 5]
 
     embeddings = embedder.encode(clauses, show_progress_bar=False)
     predictions = classifier.predict(embeddings)
@@ -648,7 +645,10 @@ def render_upload_view(embedder, classifier, nlp):
     st.markdown("""
     <div class="specter-header">
         <div class="specter-logo">
-            <div class="specter-logo-icon"></div>
+            <svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <rect x="16" y="1" width="21.2" height="21.2" rx="4" transform="rotate(45 16 1)" fill="url(#logo_grad)"/>
+                <defs><linearGradient id="logo_grad" x1="16" y1="1" x2="37.2" y2="22.2" gradientUnits="userSpaceOnUse"><stop stop-color="#60a5fa"/><stop offset="1" stop-color="#2563eb"/></linearGradient></defs>
+            </svg>
             <h1>SpecterScan</h1>
         </div>
         <p>Contract Risk Classification System</p>
@@ -661,7 +661,13 @@ def render_upload_view(embedder, classifier, nlp):
         # Icon and text above the uploader
         st.markdown("""
         <div style="text-align:center; margin-bottom: 0.5rem;">
-            <div class="upload-icon-circle">☁️</div>
+            <div class="upload-icon-circle">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#64748b" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                    <polyline points="17 8 12 3 7 8"/>
+                    <line x1="12" y1="3" x2="12" y2="15"/>
+                </svg>
+            </div>
             <h3 style="font-size:1.25rem; margin-bottom:0.5rem; color:#0f172a;">Upload Contract Document</h3>
             <p style="color:#64748b; margin-bottom:1rem;">Drag and drop your PDF, text, or CSV file here, or click to browse</p>
             <span class="supported-formats">Supports .pdf, .txt, .csv</span>
@@ -679,9 +685,9 @@ def render_upload_view(embedder, classifier, nlp):
             file_size_mb = uploaded_file.size / 1024 / 1024
             st.markdown(f"""
             <div class="file-info">
-                <h3>📄 {uploaded_file.name}</h3>
+                <h3>{uploaded_file.name}</h3>
                 <p class="file-size">{file_size_mb:.2f} MB</p>
-                <div class="ready-badge">✅ Ready for analysis</div>
+                <div class="ready-badge">Ready for analysis</div>
             </div>
             """, unsafe_allow_html=True)
 
@@ -689,7 +695,7 @@ def render_upload_view(embedder, classifier, nlp):
 
         # Analyze button — runs analysis immediately on click
         if uploaded_file:
-            if st.button("🔍  Analyze Document", use_container_width=True, type="primary"):
+            if st.button("Analyze Document", use_container_width=True, type="primary"):
                 with st.spinner("Analyzing your document…"):
                     try:
                         file_bytes = uploaded_file.getvalue()
@@ -811,7 +817,7 @@ def render_results_view(data: dict):
     with left_col:
         doc_body = ""
         for clause in data["results"]:
-            text = clause["clause_text"].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            text = clause["clause_text"].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\n", " ")
             if clause["risk_label"] == 1:
                 doc_body += f'<span class="clause-risky">{text}</span> '
             else:
@@ -829,45 +835,45 @@ def render_results_view(data: dict):
         """
         components.html(doc_full, height=700, scrolling=True)
 
-    # RIGHT — Flagged Clauses List (rendered inside iframe via components.html)
+    # RIGHT — Flagged Clauses List (native st.markdown to avoid iframe sizing issues)
     with right_col:
         flagged = [c for c in data["results"] if c["risk_label"] == 1]
 
-        cards_body = ""
-        if not flagged:
-            cards_body = '<div class="empty-clauses">🎉 No risky clauses detected!</div>'
-        else:
-            for clause in flagged:
-                text = clause["clause_text"].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-                cards_body += f"""
-                <div class="clause-card">
-                    <div class="card-header">
-                        <div class="risk-badge">⚠️ {clause['risk_category']}</div>
-                        <div class="clause-num">
-                            <span class="clause-num-label">Clause</span>
-                            <span class="clause-num-value">#{clause['clause_index']}</span>
-                        </div>
-                    </div>
-                    <div class="card-body">
-                        <p>&ldquo;{text}&rdquo;</p>
-                    </div>
-                    <div class="card-footer">
-                        <span class="review-btn">Review Section</span>
-                    </div>
-                </div>
-                """
+        # Panel header (single-line HTML to avoid markdown parsing issues)
+        st.markdown(
+            f'<div style="background:#fff; border:1px solid #e2e8f0; border-radius:12px 12px 0 0; box-shadow:0 1px 2px 0 rgba(0,0,0,0.05);">'
+            f'<div style="font-size:1.05rem; padding:1rem 1.25rem; font-weight:600; color:#0f172a; border-bottom:1px solid #e2e8f0; background:#f8fafc; border-radius:12px 12px 0 0;">Flagged Clauses List</div>'
+            f'<div style="display:flex; justify-content:space-between; align-items:center; padding:0.85rem 1.25rem; border-bottom:1px solid #e2e8f0;">'
+            f'<span style="font-size:0.875rem; font-weight:600; color:#64748b; text-transform:uppercase; letter-spacing:0.05em;">{len(flagged)} FLAGGED CLAUSES</span>'
+            f'</div></div>',
+            unsafe_allow_html=True,
+        )
 
-        cards_full = f"""
-        <html><head><style>{css}</style></head>
-        <body>
-            <div class="clauses-panel">
-                <div class="column-title">Flagged Clauses List</div>
-                <div class="clauses-list-header"><span class="flagged-count">{len(flagged)} FLAGGED CLAUSES</span></div>
-                <div class="clauses-list-body">{cards_body}</div>
-            </div>
-        </body></html>
-        """
-        components.html(cards_full, height=700, scrolling=True)
+        if not flagged:
+            st.markdown('<div style="text-align:center; padding:3rem 1rem; color:#64748b; font-size:1rem; background:#fff; border:1px solid #e2e8f0; border-top:none; border-radius:0 0 12px 12px;">No risky clauses detected!</div>', unsafe_allow_html=True)
+        else:
+            # Build clause cards as a single HTML blob (no newlines to avoid markdown parsing issues)
+            cards_parts = []
+            for clause in flagged:
+                text = clause["clause_text"].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;").replace("\n", " ")
+                card = (
+                    '<div style="background:#fff; border:1px solid #e2e8f0; border-left:4px solid #ef4444; border-radius:12px; box-shadow:0 1px 2px 0 rgba(0,0,0,0.05); overflow:hidden; margin-bottom:1.25rem;">'
+                    '<div style="display:flex; justify-content:space-between; align-items:center; padding:0.85rem 1.15rem; border-bottom:1px solid #e2e8f0; background:#fafaf9;">'
+                    f'<span style="display:inline-flex; align-items:center; gap:0.375rem; padding:0.2rem 0.7rem; border-radius:9999px; background:#fee2e2; color:#991b1b; font-size:0.7rem; font-weight:700; text-transform:uppercase; letter-spacing:0.05em;">&#9888; {clause["risk_category"]}</span>'
+                    '<div style="display:flex; flex-direction:column; align-items:flex-end;">'
+                    '<span style="font-size:0.6rem; color:#64748b; text-transform:uppercase; letter-spacing:0.05em;">Clause</span>'
+                    f'<span style="font-size:1.1rem; font-weight:700; color:#b91c1c; line-height:1;">#{clause["clause_index"]}</span>'
+                    '</div></div>'
+                    f'<div style="padding:1.15rem;"><p style="font-size:0.95rem; line-height:1.6; color:#0f172a; font-style:italic; margin:0;">&ldquo;{text}&rdquo;</p></div>'
+                    '</div>'
+                )
+                cards_parts.append(card)
+
+            all_cards = "".join(cards_parts)
+            st.markdown(
+                f'<div style="background:#f8fafc; border:1px solid #e2e8f0; border-top:none; border-radius:0 0 12px 12px; padding:1.25rem; max-height:70vh; overflow-y:auto;">{all_cards}</div>',
+                unsafe_allow_html=True,
+            )
 
 
 # ══════════════════════════════════════════════════

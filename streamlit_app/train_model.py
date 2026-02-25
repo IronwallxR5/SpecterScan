@@ -9,10 +9,19 @@ This produces `legal_risk_classifier.pkl` in the same folder.
 
 import os
 import re
+import ssl
 import warnings
 import numpy as np
 import pandas as pd
 import nltk
+
+try:
+    _create_unverified_https_context = ssl._create_unverified_context
+except AttributeError:
+    pass
+else:
+    ssl._create_default_https_context = _create_unverified_https_context
+
 from nltk.corpus import stopwords
 from nltk.tokenize import word_tokenize
 from sentence_transformers import SentenceTransformer
@@ -114,7 +123,7 @@ def train():
     # 6. Save
     print(f"\n[6/6] Saving model to: {MODEL_OUTPUT}")
     joblib.dump(classifier, MODEL_OUTPUT)
-    print("\n✅  Training complete! Model saved successfully.")
+    print("\nTraining complete! Model saved successfully.")
     print("=" * 50)
 
 
