@@ -182,7 +182,7 @@ async def lifespan(app: FastAPI):
     # 6. Groq LLM (multi-key fallback)
     app.state.groq_llm = GroqWithFallback(
         api_keys=GROQ_API_KEYS,
-        model="llama3-8b-8192",
+        model="llama-3.1-8b-instant",
         temperature=0.1,
     )
     logger.info(f"Groq LLM initialised with {len(GROQ_API_KEYS)} fallback key(s).")

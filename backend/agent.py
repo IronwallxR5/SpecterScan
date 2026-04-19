@@ -76,7 +76,7 @@ def build_graph(embedder, classifier, nlp, rag_embedder, pinecone_index, groq_ll
     nlp             : spaCy Language model (en_core_web_sm)
     rag_embedder    : SentenceTransformer (BAAI/bge-large-en-v1.5) — MUST match Pinecone index dims
     pinecone_index  : Pinecone Index object for the 'specterscan' index
-    groq_llm        : ChatGroq instance (llama3-8b-8192, configured without structured output)
+    groq_llm        : ChatGroq instance (llama-3.1-8b-instant, configured without structured output)
     """
 
     # ── Node 1: Extract Risks ─────────────────────────────────────────────────
@@ -179,7 +179,7 @@ def build_graph(embedder, classifier, nlp, rag_embedder, pinecone_index, groq_ll
         to produce strict JSON output. Falls back to a classifier-based report
         if the LLM call fails, so the API always returns something useful.
         """
-        logger.info("[Node 3 — Synthesizer] Calling Groq llama3-8b-8192...")
+        logger.info("[Node 3 — Synthesizer] Calling Groq llama-3.1-8b-instant...")
         errors = list(state.get("errors", []))
 
         flagged_text = "\n".join(
