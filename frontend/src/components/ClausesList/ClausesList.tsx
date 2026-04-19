@@ -1,27 +1,38 @@
 import { ClauseCard } from './ClauseCard';
+import { CheckCircle } from 'lucide-react';
 import styles from './ClausesList.module.css';
-import type { ClauseResult } from '../../App';
+import type { RiskItem } from '../../App';
 
 interface ClausesListProps {
-  results: ClauseResult[];
+  risks: RiskItem[];
 }
 
-export function ClausesList({ results }: ClausesListProps) {
-  // Only show the risky clauses in the side panel
-  const flaggedClauses = results.filter((clause) => clause.risk_label === 1);
+export function ClausesList({ risks }: ClausesListProps) {
+  const highCount   = risks.filter((r) => r.severity === 'High').length;
+  const mediumCount = risks.filter((r) => r.severity === 'Medium').length;
+  const lowCount    = risks.filter((r) => r.severity === 'Low').length;
 
   return (
     <div className={styles.listContainer}>
       <div className={styles.listHeader}>
-        <span className={styles.count}>{flaggedClauses.length} Flagged Clauses</span>
-        <button className={styles.filterBtn}></button>
+        <span className={styles.count}>{risks.length} Flagged Clauses</span>
+        <div className={styles.severityPills}>
+          {highCount > 0   && <span className={`${styles.pill} ${styles.pillHigh}`}>{highCount} High</span>}
+          {mediumCount > 0 && <span className={`${styles.pill} ${styles.pillMedium}`}>{mediumCount} Med</span>}
+          {lowCount > 0    && <span className={`${styles.pill} ${styles.pillLow}`}>{lowCount} Low</span>}
+        </div>
       </div>
+
       <div className={styles.cardsWrapper}>
-        {flaggedClauses.length === 0 ? (
-          <p className={styles.emptyState}>No risky clauses detected!</p>
+        {risks.length === 0 ? (
+          <div className={styles.emptyState}>
+            <span className={styles.emptyIcon}><CheckCircle size={40} className={styles.emptyIconSvg} /></span>
+            <p>No risky clauses detected!</p>
+            <p className={styles.emptySubtext}>This contract appears to be compliant.</p>
+          </div>
         ) : (
-          flaggedClauses.map((clause) => (
-            <ClauseCard key={clause.clause_index} clause={clause} />
+          risks.map((risk) => (
+            <ClauseCard key={risk.clause_index} clause={risk} />
           ))
         )}
       </div>

@@ -1,13 +1,14 @@
 import React, { useState, useRef } from 'react';
-import { UploadCloud, FileText, CheckCircle, Loader2 } from 'lucide-react';
+import { UploadCloud, FileText, CheckCircle, Loader2, ShieldCheck, Sparkles } from 'lucide-react';
 import styles from './UploadView.module.css';
 
 interface UploadViewProps {
   onAnalyze: (file: File) => void;
   isAnalyzing: boolean;
+  onDemoMode: () => void;
 }
 
-export function UploadView({ onAnalyze, isAnalyzing }: UploadViewProps) {
+export function UploadView({ onAnalyze, isAnalyzing, onDemoMode }: UploadViewProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -47,11 +48,23 @@ export function UploadView({ onAnalyze, isAnalyzing }: UploadViewProps) {
   return (
     <div className={styles.container}>
       <header className={styles.header}>
-        <div className={styles.logo}>
-          <div className={styles.logoIcon}></div>
-          <h1>SpecterScan</h1>
+        <div className={styles.brandRow}>
+          <div className={styles.logo}>
+            <div className={styles.logoIcon}></div>
+            <h1>SpecterScan</h1>
+          </div>
+          <span className={styles.badge}>AI Contract Intelligence</span>
         </div>
-        <p>Contract Risk Classification System</p>
+        <h2>Simple upload. Precise post-processing. Professional highlights.</h2>
+        <p>
+          Upload your agreement and get a clean, structured risk report with severity-tagged
+          clauses and plain-language mitigation guidance.
+        </p>
+
+        <div className={styles.heroMeta}>
+          <span><ShieldCheck size={16} /> Reliable clause classification</span>
+          <span><Sparkles size={16} /> Executive-ready output</span>
+        </div>
       </header>
 
       <main className={styles.main}>
@@ -86,28 +99,39 @@ export function UploadView({ onAnalyze, isAnalyzing }: UploadViewProps) {
                 <div className={styles.iconCircle}>
                   <UploadCloud className={styles.icon} size={32} />
                 </div>
-                <h3>Upload Contract Document</h3>
-                <p>Drag and drop your PDF or text file here, or click to browse</p>
+                <h3>Upload contract document</h3>
+                <p>Drag and drop your PDF or TXT file, or click to browse.</p>
                 <span className={styles.supportedFormats}>Supports .pdf, .txt</span>
               </>
             )}
           </div>
         </div>
 
-        <button
-          className={styles.analyzeBtn}
-          disabled={!file || isAnalyzing}
-          onClick={() => file ? onAnalyze(file) : undefined}
-        >
-          {isAnalyzing ? (
-            <>
-              <Loader2 className={styles.spinner} size={20} />
-              Analyzing...
-            </>
-          ) : (
-            'Analyze Document'
-          )}
-        </button>
+        <div className={styles.actionsRow}>
+          <button
+            className={styles.analyzeBtn}
+            disabled={!file || isAnalyzing}
+            onClick={() => file ? onAnalyze(file) : undefined}
+          >
+            {isAnalyzing ? (
+              <>
+                <Loader2 className={styles.spinner} size={20} />
+                Analyzing...
+              </>
+            ) : (
+              'Analyze Document'
+            )}
+          </button>
+
+          <button
+            className={styles.demoBtn}
+            disabled={isAnalyzing}
+            onClick={onDemoMode}
+            type="button"
+          >
+            View Demo Mode
+          </button>
+        </div>
       </main>
     </div>
   );

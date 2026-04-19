@@ -7,9 +7,9 @@
 # --- Web Framework & Server ---
 fastapi
 uvicorn[standard]
+python-dotenv
 
 # --- File Upload Support ---
-# FastAPI needs this to parse multipart/form-data (file uploads)
 python-multipart
 
 # --- PDF Text Extraction ---
@@ -18,6 +18,18 @@ PyPDF2
 # --- NLP (Sentence Segmentation) ---
 spacy
 
-# --- Machine Learning ---
+# --- Machine Learning (Classification) ---
 scikit-learn
+joblib
 sentence-transformers
+
+# --- Agentic Workflow ---
+langgraph
+langchain-core
+langchain-groq
+
+# --- Vector Store (RAG via Pinecone) ---
+pinecone
+
+# --- Structured Outputs ---
+pydantic

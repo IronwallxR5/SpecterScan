@@ -1,3 +1,6 @@
+# Secrets — never commit real .env files
+.env
+
 # Python
 __pycache__/
 *.pyc
@@ -7,7 +10,7 @@ dist/
 build/
 *.egg
 
-# Virtual environment
+# Virtual environments
 .venv/
 venv/
 env/
@@ -24,6 +27,12 @@ env/
 
 # Jupyter
 .ipynb_checkpoints/
+*.ipynb
 
-# Large data files (keep the model .pkl in git)
-# legal_docs_cleaned.csv  ← uncomment if too large for git
+# Large data and research files (not part of the app)
+*.csv
+*.tex
+
+# Node
+node_modules/
+frontend/dist/

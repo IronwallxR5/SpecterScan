@@ -1,59 +1,159 @@
 import os
 import io
+import time
 import logging
 from contextlib import asynccontextmanager
+from typing import List, Any
 
-import joblib                     
-import spacy                   
-from PyPDF2 import PdfReader       
-from sentence_transformers import SentenceTransformer  
+from dotenv import load_dotenv
+load_dotenv()  # Load .env before anything reads os.environ
+
+import joblib
+import spacy
+from PyPDF2 import PdfReader
+from sentence_transformers import SentenceTransformer
+from pinecone import Pinecone as PineconeClient
+from langchain_groq import ChatGroq
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+
+from agent import build_graph
 
 
-MODEL_PATH = os.path.join(os.path.dirname(__file__), "legal_risk_classifier.pkl")
+# ── Config ────────────────────────────────────────────────────────────────────
 
+MODEL_PATH            = os.path.join(os.path.dirname(__file__), "legal_risk_classifier.pkl")
+CLASSIFY_EMBED_MODEL  = "sentence-transformers/all-MiniLM-L6-v2"
+RAG_EMBED_MODEL       = "BAAI/bge-large-en-v1.5"   # Must match the Pinecone index dimensions (1024)
+PINECONE_INDEX_NAME   = "specterscan"
 
-EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
-
-
-RISK_LABELS = {
-    0: "Normal/Compliant",
-    1: "Risky/Potential Issue",
-}
-
+# Groq API key pool — loaded exclusively from environment variables.
+# Keys are tried in order; the next is used when one hits a rate-limit or error.
+GROQ_API_KEYS: List[str] = [
+    k for k in [
+        os.environ.get("GROQ_API_KEY"),
+        os.environ.get("GROQ_API_KEY_2"),
+        os.environ.get("GROQ_API_KEY_3"),
+        os.environ.get("GROQ_API_KEY_4"),
+    ]
+    if k  # filter out None / unset vars
+]
+# Deduplicate while preserving order
+seen: set = set()
+GROQ_API_KEYS = [k for k in GROQ_API_KEYS if not (k in seen or seen.add(k))]  # type: ignore[func-returns-value]
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("specterscan")
 
 
+# ── Groq Fallback Wrapper ─────────────────────────────────────────────────────
 
+class GroqWithFallback:
+    """
+    Wraps multiple ChatGroq instances (one per API key) and automatically
+    retries with the next key when a request fails due to rate-limiting (429)
+    or any other API error. Exposes the same interface as ChatGroq so it
+    can be passed directly to the LangGraph agent.
+    """
+
+    def __init__(self, api_keys: List[str], model: str = "llama3-8b-8192", temperature: float = 0.1):
+        if not api_keys:
+            raise RuntimeError("No Groq API keys available. Set GROQ_API_KEY or add fallback keys.")
+        self._clients: List[ChatGroq] = [
+            ChatGroq(model=model, temperature=temperature, groq_api_key=key)
+            for key in api_keys
+        ]
+        self._current_index = 0
+        logger.info(f"GroqWithFallback initialised with {len(self._clients)} API key(s).")
+
+    def _next_client(self) -> ChatGroq:
+        """Round-robin advance to the next available key."""
+        self._current_index = (self._current_index + 1) % len(self._clients)
+        return self._clients[self._current_index]
+
+    def invoke(self, input: Any, **kwargs) -> Any:
+        """Call invoke, retrying with each key on failure."""
+        last_error = None
+        for attempt in range(len(self._clients)):
+            client = self._clients[(self._current_index + attempt) % len(self._clients)]
+            try:
+                result = client.invoke(input, **kwargs)
+                # Advance current index on success so we distribute load
+                self._current_index = (self._current_index + attempt) % len(self._clients)
+                return result
+            except Exception as e:
+                err_str = str(e).lower()
+                if "rate" in err_str or "429" in err_str or "limit" in err_str or "auth" in err_str or "401" in err_str:
+                    logger.warning(f"[Groq key #{attempt + 1}] Rate-limited or auth error — trying next key. Error: {e}")
+                    time.sleep(0.3)
+                    last_error = e
+                else:
+                    # Non-rate-limit error — re-raise immediately
+                    raise e
+        raise RuntimeError(f"All {len(self._clients)} Groq API keys exhausted. Last error: {last_error}")
+
+    def with_structured_output(self, schema):
+        """
+        Return a wrapper that calls with_structured_output on each client in sequence
+        until one succeeds, mirroring the ChatGroq interface used by agent.py.
+        """
+        return _StructuredOutputFallback(self._clients, self._current_index, schema)
+
+
+class _StructuredOutputFallback:
+    """
+    Wraps multiple `client.with_structured_output(schema)` instances
+    and retries across keys on failure.
+    """
+
+    def __init__(self, clients: List[ChatGroq], start_index: int, schema):
+        self._structured = [c.with_structured_output(schema) for c in clients]
+        self._start_index = start_index
+
+    def invoke(self, input: Any, **kwargs) -> Any:
+        last_error = None
+        n = len(self._structured)
+        for attempt in range(n):
+            idx = (self._start_index + attempt) % n
+            try:
+                result = self._structured[idx].invoke(input, **kwargs)
+                return result
+            except Exception as e:
+                err_str = str(e).lower()
+                if "rate" in err_str or "429" in err_str or "limit" in err_str or "auth" in err_str or "401" in err_str:
+                    logger.warning(f"[Groq structured key #{idx + 1}] Rate-limited — trying next key. Error: {e}")
+                    time.sleep(0.3)
+                    last_error = e
+                else:
+                    raise e
+        raise RuntimeError(f"All Groq API keys exhausted for structured output. Last error: {last_error}")
+
+
+# ── Lifespan ──────────────────────────────────────────────────────────────────
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
-    This function runs BEFORE the server starts accepting requests
-    (the code above 'yield') and AFTER the server shuts down
-    (the code below 'yield').
+    Load all heavy resources once at startup, store them on app.state,
+    then release on shutdown. Nothing is re-loaded per-request.
     """
+    logger.info("Starting up — loading models and connecting to services...")
 
+    # 1. Classification embedder
+    app.state.embedder = SentenceTransformer(CLASSIFY_EMBED_MODEL)
+    logger.info(f"Classification embedder '{CLASSIFY_EMBED_MODEL}' loaded.")
 
-    logger.info("Starting up — loading ML models...")
-
-
-    app.state.embedder = SentenceTransformer(EMBEDDING_MODEL_NAME)
-    logger.info("SentenceTransformer loaded.")
-
-
+    # 2. sklearn classifier
     if not os.path.exists(MODEL_PATH):
-        logger.error(f"Model file not found at: {MODEL_PATH}")
         raise FileNotFoundError(
-            f"Cannot find the model file at '{MODEL_PATH}'. "
-            "Make sure 'legal_risk_classifier.pkl' is in the backend/ folder."
+            f"Cannot find model at '{MODEL_PATH}'. "
+            "Ensure 'legal_risk_classifier.pkl' is in the backend/ folder."
         )
     app.state.classifier = joblib.load(MODEL_PATH)
     logger.info("Classifier (.pkl) loaded.")
 
+    # 3. spaCy
     try:
         app.state.nlp = spacy.load("en_core_web_sm")
     except OSError:
@@ -62,58 +162,82 @@ async def lifespan(app: FastAPI):
             "Run: python -m spacy download en_core_web_sm"
         )
         raise
-    logger.info("spaCy model loaded.")
+    logger.info("spaCy 'en_core_web_sm' loaded.")
 
-    logger.info("All models loaded successfully — server is ready!")
+    # 4. RAG embedder (1024-dim to match Pinecone index)
+    app.state.rag_embedder = SentenceTransformer(RAG_EMBED_MODEL)
+    logger.info(f"RAG embedder '{RAG_EMBED_MODEL}' loaded.")
 
+    # 5. Pinecone
+    pinecone_api_key = os.environ.get("PINECONE_API_KEY")
+    if not pinecone_api_key:
+        raise RuntimeError(
+            "PINECONE_API_KEY environment variable is not set. "
+            "Add it to your Hugging Face Space secrets."
+        )
+    pc = PineconeClient(api_key=pinecone_api_key)
+    app.state.pinecone_index = pc.Index(PINECONE_INDEX_NAME)
+    logger.info(f"Pinecone index '{PINECONE_INDEX_NAME}' connected.")
+
+    # 6. Groq LLM (multi-key fallback)
+    app.state.groq_llm = GroqWithFallback(
+        api_keys=GROQ_API_KEYS,
+        model="llama3-8b-8192",
+        temperature=0.1,
+    )
+    logger.info(f"Groq LLM initialised with {len(GROQ_API_KEYS)} fallback key(s).")
+
+    # 7. LangGraph
+    app.state.graph = build_graph(
+        embedder=app.state.embedder,
+        classifier=app.state.classifier,
+        nlp=app.state.nlp,
+        rag_embedder=app.state.rag_embedder,
+        pinecone_index=app.state.pinecone_index,
+        groq_llm=app.state.groq_llm,
+    )
+    logger.info("LangGraph compiled — server is ready!")
 
     yield
-
 
     logger.info("Shutting down — goodbye!")
 
 
+# ── App ───────────────────────────────────────────────────────────────────────
 
 app = FastAPI(
     title="SpecterScan API",
-    description="Intelligent Contract Risk Analysis — clause-level risk classifier",
-    version="1.0.0",
+    description=(
+        "Intelligent Contract Risk Analysis — "
+        "LangGraph Agentic Workflow with Pinecone RAG + Groq LLM Synthesis"
+    ),
+    version="2.0.0",
     lifespan=lifespan,
 )
-
-
-
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:3000",  
-        "http://localhost:5173",    
+        "http://localhost:3000",
+        "http://localhost:5173",
+        "http://localhost:5174",
         "http://127.0.0.1:3000",
         "http://127.0.0.1:5173",
+        "http://127.0.0.1:5174",
         "https://specter-scan-7opa.vercel.app",
-        "https://specter-scan.vercel.app"
+        "https://specter-scan.vercel.app",
+        "https://ironwallxr5-specterscan.hf.space",
     ],
     allow_credentials=True,
-    allow_methods=["*"],           
-    allow_headers=["*"],            
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
-# =====================================
+# ── Utility Helpers ───────────────────────────────────────────────────────────
 
 def extract_text_from_pdf(file_bytes: bytes) -> str:
-    """
-    Given raw bytes of a PDF file, use PyPDF2 to extract all text.
-
-    How it works:
-      - PdfReader reads the binary content.
-      - We loop through every page and call .extract_text() on each.
-      - All page texts are joined together with newlines.
-
-    Returns the combined text string (may be empty if the PDF
-    contains only images or scanned content).
-    """
+    """Extract all readable text from a PDF via PyPDF2."""
     try:
         reader = PdfReader(io.BytesIO(file_bytes))
         pages_text = []
@@ -122,7 +246,7 @@ def extract_text_from_pdf(file_bytes: bytes) -> str:
             if text:
                 pages_text.append(text)
             else:
-                logger.warning(f"Page {page_num} returned no text (might be scanned/image).")
+                logger.warning(f"Page {page_num} returned no text (may be scanned/image).")
         return "\n".join(pages_text)
     except Exception as e:
         logger.error(f"Failed to read PDF: {e}")
@@ -133,11 +257,7 @@ def extract_text_from_pdf(file_bytes: bytes) -> str:
 
 
 def extract_text_from_txt(file_bytes: bytes) -> str:
-    """
-    Decode a plain-text file from bytes to a Python string.
-    We try UTF-8 first (the most common encoding), then fall back
-    to Latin-1 which never fails but might produce garbled characters.
-    """
+    """Decode a plain-text file, trying UTF-8 then Latin-1."""
     try:
         return file_bytes.decode("utf-8")
     except UnicodeDecodeError:
@@ -145,90 +265,41 @@ def extract_text_from_txt(file_bytes: bytes) -> str:
         return file_bytes.decode("latin-1")
 
 
-def segment_into_clauses(text: str, nlp) -> list[str]:
-    """
-    Use spaCy's sentence boundary detection to split a contract
-    into individual clauses/sentences.
-
-    Why spaCy instead of simple regex splitting (e.g., splitting on '.')?
-      - Legal text often contains abbreviations like "U.S.A." or "No."
-        which would cause false splits with naive regex.
-      - spaCy's model is trained on real English text and handles these
-        edge cases much better.
-
-    We also filter out any sentences that are just whitespace or
-    shorter than 5 characters (those are usually noise).
-    """
-    doc = nlp(text)
-    clauses = []
-    for sent in doc.sents:
-        clause = sent.text.strip()
-    
-        if len(clause) >= 5:
-            clauses.append(clause)
-    return clauses
-
-
-# =================================================
+# ── Endpoints ─────────────────────────────────────────────────────────────────
 
 @app.get("/health")
 async def health_check():
-    """
-    A simple endpoint to verify the server is running.
-    Useful for: Docker health checks, CI/CD, or just a quick sanity test.
-    """
-    return {"status": "healthy"}
+    """Server liveness probe for Docker / HF Spaces health checks."""
+    return {"status": "healthy", "version": "2.0.0"}
 
 
 @app.post("/analyze")
 def analyze_contract(file: UploadFile = File(...)):
     """
-    MAIN ENDPOINT — Upload a contract and get clause-level risk analysis.
+    Upload a contract (.pdf or .txt) and receive a structured agentic risk report.
 
-    Pipeline:
-      1. Validate the file extension (.pdf or .txt only).
-      2. Read the file bytes.
-      3. Extract raw text from the file.
-      4. Segment the text into individual clauses using spaCy.
-      5. Encode each clause into a 384-dim vector using SentenceTransformer.
-      6. Predict risk (0 or 1) for each clause with the loaded classifier.
-      7. Return a JSON response with all clauses and their predictions.
-
-    Request:
-      - Content-Type: multipart/form-data
-      - Field name: "file"
-      - Accepted types: .pdf, .txt
-
-    Response (200 OK):
-      {
-        "filename": "contract.pdf",
-        "total_clauses": 12,
-        "results": [
-          {
-            "clause_index": 1,
-            "clause_text": "The contractor shall ...",
-            "risk_label": 0,
-            "risk_category": "Normal/Compliant"
-          },
-          ...
-        ]
-      }
+    Response schema:
+    {
+        "filename":      str,
+        "original_text": str,
+        "report": {
+            "summary":    str,
+            "risks":      [{ "clause_index", "clause_text", "severity",
+                             "explanation", "mitigation" }],
+            "disclaimer": str
+        }
+    }
     """
-
-    filename = file.filename or "unknown"
+    filename  = file.filename or "unknown"
     extension = os.path.splitext(filename)[1].lower()
 
     if extension not in (".pdf", ".txt"):
         raise HTTPException(
             status_code=400,
-            detail=(
-                f"Unsupported file type: '{extension}'. "
-                "Please upload a .pdf or .txt file."
-            ),
+            detail=f"Unsupported file type: '{extension}'. Please upload a .pdf or .txt file.",
         )
 
     try:
-        # Since this is no longer an async function, we can just use file.file.read()
         file_bytes = file.file.read()
     except Exception as e:
         raise HTTPException(
@@ -237,83 +308,81 @@ def analyze_contract(file: UploadFile = File(...)):
         )
 
     if not file_bytes:
-        raise HTTPException(
-            status_code=400,
-            detail="The uploaded file is empty (0 bytes).",
-        )
+        raise HTTPException(status_code=400, detail="The uploaded file is empty (0 bytes).")
 
+    raw_text = (
+        extract_text_from_pdf(file_bytes)
+        if extension == ".pdf"
+        else extract_text_from_txt(file_bytes)
+    )
 
-    if extension == ".pdf":
-        raw_text = extract_text_from_pdf(file_bytes)
-    else:
-        raw_text = extract_text_from_txt(file_bytes)
-
- 
     if not raw_text or not raw_text.strip():
         raise HTTPException(
             status_code=400,
             detail=(
                 "No readable text could be extracted from the file. "
-                "If this is a scanned PDF, it may require OCR (not supported yet)."
+                "Scanned PDFs require OCR (not yet supported)."
             ),
         )
 
-    logger.info(f"Extracted {len(raw_text)} characters from '{filename}'.")
+    logger.info(f"Extracted {len(raw_text)} characters from '{filename}'. Invoking LangGraph...")
 
-    clauses = segment_into_clauses(raw_text, app.state.nlp)
-
-    if not clauses:
-        raise HTTPException(
-            status_code=400,
-            detail="The file was readable but no meaningful clauses could be extracted.",
-        )
-
-    logger.info(f"Segmented into {len(clauses)} clauses.")
-
+    initial_state = {
+        "contract_text":     raw_text,
+        "all_clauses":       [],
+        "flagged_clauses":   [],
+        "retrieved_context": "",
+        "structured_report": {},
+        "errors":            [],
+    }
 
     try:
-
-        embeddings = app.state.embedder.encode(clauses, show_progress_bar=False)
-
- 
-        predictions = app.state.classifier.predict(embeddings)
+        final_state = app.state.graph.invoke(initial_state)
     except Exception as e:
-        logger.error(f"Inference failed: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"An error occurred during analysis: {str(e)}",
-        )
+        logger.error(f"LangGraph invocation failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Agent pipeline failed: {str(e)}")
 
- 
-    results = []
-    for i, (clause_text, prediction) in enumerate(zip(clauses, predictions)):
-        label = int(prediction)    
-        results.append({
-            "clause_index": i + 1, 
-            "clause_text": clause_text,
-            "risk_label": label,
-            "risk_category": RISK_LABELS.get(label, "Unknown"),
-        })
-
-    logger.info(
-        f"Analysis complete for '{filename}': "
-        f"{sum(1 for r in results if r['risk_label'] == 1)} risky / {len(results)} total clauses."
-    )
+    if final_state.get("errors"):
+        logger.warning(f"Agent completed with non-fatal warnings: {final_state['errors']}")
 
     return {
-        "filename": filename,
-        "total_clauses": len(results),
-        "results": results,
+        "filename":      filename,
+        "original_text": raw_text,
+        "report":        final_state["structured_report"],
     }
 
 
+class ExplainRequest(BaseModel):
+    clause_text: str
 
+
+@app.post("/explain_clause")
+def explain_clause(request: ExplainRequest):
+    """
+    Accept a single clause string and return a concise plain-English explanation.
+
+    Request:  { "clause_text": "The contractor hereby waives..." }
+    Response: { "explanation": "This clause is risky because..." }
+    """
+    if not request.clause_text.strip():
+        raise HTTPException(status_code=400, detail="clause_text cannot be empty.")
+
+    prompt = (
+        "You are a legal expert explaining contract clauses to non-lawyers. "
+        "Explain why the following legal clause is risky in exactly 2 clear, "
+        "jargon-free sentences. Be direct and specific.\n\n"
+        f"Clause: {request.clause_text}"
+    )
+
+    try:
+        response = app.state.groq_llm.invoke(prompt)
+        return {"explanation": response.content}
+    except Exception as e:
+        logger.error(f"/explain_clause LLM call failed: {e}")
+        raise HTTPException(status_code=500, detail=f"LLM explanation failed: {str(e)}")
 
 
 if __name__ == "__main__":
     import uvicorn
-    # When deployed on Render, it injects a PORT environment variable
-    port = int(os.environ.get("PORT", 8000))
-    # reload=True is normally not recommended for production, 
-    # but Render handles restarts anyway. Safer to turn it off.
+    port = int(os.environ.get("PORT", 7860))
     uvicorn.run("main:app", host="0.0.0.0", port=port)
