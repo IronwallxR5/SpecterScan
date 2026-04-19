@@ -32,7 +32,7 @@ export function ClauseCard({ clause }: ClauseCardProps) {
     setShowExplanation(true);
 
     try {
-      const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:7860';
+      const apiUrl = import.meta.env.API_URL || 'http://localhost:8000';
       const res = await fetch(`${apiUrl}/explain_clause`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

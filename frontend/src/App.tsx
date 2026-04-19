@@ -105,7 +105,7 @@ function App() {
     formData.append("file", file);
 
     try {
-      const apiUrl = import.meta.env.VITE_API_URL || "http://localhost:7860";
+      const apiUrl = import.meta.env.API_URL || "http://localhost:8000";
       const response = await fetch(`${apiUrl}/analyze`, {
         method: "POST",
         body: formData,

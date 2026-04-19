@@ -60,11 +60,6 @@ export function UploadView({ onAnalyze, isAnalyzing, onDemoMode }: UploadViewPro
           Upload your agreement and get a clean, structured risk report with severity-tagged
           clauses and plain-language mitigation guidance.
         </p>
-
-        <div className={styles.heroMeta}>
-          <span><ShieldCheck size={16} /> Reliable clause classification</span>
-          <span><Sparkles size={16} /> Executive-ready output</span>
-        </div>
       </header>
 
       <main className={styles.main}>
