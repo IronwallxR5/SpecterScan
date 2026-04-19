@@ -1,136 +1,112 @@
-# SpecterScan 
+# SpecterScan
 
-> **Intelligent Contract Risk Analysis** — Upload a legal document, get back every risky clause highlighted and explained.
+**AI-powered legal contract risk analysis.** Upload a PDF or plain-text contract and receive a structured, severity-tagged risk report with plain-English explanations and concrete mitigation recommendations — in seconds.
 
-SpecterScan is a university project (Milestone 1) that uses a trained Machine Learning model to scan legal contracts clause-by-clause and flag potential risks. It combines a FastAPI backend with a React + TypeScript frontend.
-
----
-
-## What It Does
-
-1. You upload a **PDF or TXT** contract through the web UI.
-2. The backend extracts the text and splits it into individual **sentences/clauses** using spaCy's NLP pipeline.
-3. Each clause is converted into a **384-dimensional semantic embedding** using `all-MiniLM-L6-v2`.
-4. A **Logistic Regression classifier** (trained on 21,000+ real legal clauses from Kaggle) predicts whether each clause is:
-   - `0` — **Normal / Compliant** 
-   - `1` — **Risky / Potential Issue** 
-5. The React frontend displays the full document with **risky clauses highlighted inline**, plus a side panel listing every flagged clause.
+🔗 **Live Demo:** [specter-scan-7opa.vercel.app](https://specter-scan-7opa.vercel.app)
+🔗 **Backend API:** [ironwallxr5-specterscan.hf.space](https://ironwallxr5-specterscan.hf.space)
+🔗 **GitHub:** [github.com/IronwallxR5/SpecterScan](https://github.com/IronwallxR5/SpecterScan)
 
 ---
 
-## Project Structure
+## What it does
+
+SpecterScan runs every uploaded contract through a **LangGraph agentic workflow** with three stages:
+
+1. **Clause Extraction & Classification** — spaCy segments the contract into individual sentences; a scikit-learn classifier (backed by `sentence-transformers/all-MiniLM-L6-v2` embeddings) flags each clause as risky or safe.
+2. **RAG Retrieval** — Flagged clauses are embedded with `BAAI/bge-large-en-v1.5` and queried against a Pinecone vector index containing 7,700+ labelled legal clauses for contextual grounding.
+3. **LLM Synthesis** — Groq's `llama-3.1-8b-instant` model produces a structured JSON report with per-clause severity (`High` / `Medium` / `Low`), plain-English explanation, and actionable mitigation — enforced by a Pydantic output schema.
+
+The frontend renders the full document with **in-line colour highlights** and a clause-by-clause risk panel. Every clause card includes an **"Explain to Me"** button that fires a zero-shot Groq LLM call for an on-demand plain-English explanation.
+
+---
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    React Frontend (Vite)                │
+│   Upload → results split-pane (doc viewer + clause list) │
+└──────────────────────────┬──────────────────────────────┘
+                           │ POST /analyze  (file upload)
+                           │ POST /explain_clause  (JSON)
+┌──────────────────────────▼──────────────────────────────┐
+│               FastAPI Backend  (Python 3.10)            │
+│                                                         │
+│   Lifespan Startup:                                     │
+│     all-MiniLM-L6-v2 ──► sklearn classifier (.pkl)     │
+│     BAAI/bge-large-en-v1.5 ──► RAG embedder            │
+│     Pinecone client ──► specterscan index               │
+│     GroqWithFallback ──► 4-key pool                     │
+│                                                         │
+│   POST /analyze  ──►  LangGraph StateGraph              │
+│                          │                              │
+│                 ┌────────▼─────────┐                    │
+│                 │  extract_risks   │ spaCy + sklearn    │
+│                 └────────┬─────────┘                    │
+│              flagged?    │    none flagged              │
+│              ┌───────────┤    ┌────────────────┐        │
+│              │           │    │ no_risks_found │─► END  │
+│    ┌─────────▼──────┐    └────┴────────────────┘        │
+│    │retrieve_context│ Pinecone top-k=3                  │
+│    └─────────┬──────┘                                   │
+│    ┌─────────▼──────────┐                               │
+│    │ synthesize_report  │ Groq structured output        │
+│    └─────────┬──────────┘                               │
+│              └──► { filename, original_text, report }  │
+└─────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Tech Stack
+
+| Layer | Technology | Purpose |
+|---|---|---|
+| Frontend | React + TypeScript + Vite + CSS Modules | UI with drag-and-drop upload, split-pane viewer |
+| Backend | FastAPI + Python 3.10 | REST API, file parsing, request orchestration |
+| Agentic Workflow | LangGraph | Stateful 3-node graph with conditional routing |
+| NLP Segmentation | spaCy `en_core_web_sm` | Sentence boundary detection |
+| Risk Classification | scikit-learn + `all-MiniLM-L6-v2` | Binary risk labelling per clause |
+| RAG Retrieval | Pinecone + `BAAI/bge-large-en-v1.5` | Semantic retrieval of similar legal clauses |
+| LLM Synthesis | Groq `llama-3.1-8b-instant` | Structured JSON report generation |
+| Structured Output | Pydantic v2 | Schema-enforced LLM responses |
+| PDF Extraction | PyPDF2 | Page-by-page text extraction |
+| Deployment (BE) | Hugging Face Spaces (Docker) | Containerised FastAPI on port 7860 |
+| Deployment (FE) | Vercel | Static React build |
+
+---
+
+## Repository Structure
 
 ```
 SpecterScan/
 ├── backend/
-│   ├── main.py                     # FastAPI app — the full analysis pipeline
-│   ├── requirements.txt            # Python dependencies
-│   ├── legal_risk_classifier.pkl   # Trained Logistic Regression model
-│   └── venv/                       # Python virtual environment
-│
+│   ├── agent.py                  # LangGraph state machine (3 nodes + conditional routing)
+│   ├── main.py                   # FastAPI app, GroqWithFallback, lifespan model loading
+│   ├── legal_risk_classifier.pkl # Trained sklearn binary classifier
+│   ├── build_vector_db.py        # Offline script to populate Pinecone index
+│   ├── requirements.txt
+│   ├── Dockerfile                # For Hugging Face Spaces (port 7860)
+│   └── .env.example              # Environment variable template
 ├── frontend/
 │   ├── src/
-│   │   ├── App.tsx                             # Root — manages upload/results state
-│   │   ├── components/
-│   │   │   ├── UploadView/       # Drag-and-drop file upload screen
-│   │   │   ├── ResultsView/      # Split-panel results layout
-│   │   │   ├── DocumentViewer/   # Full document with inline risk highlights
-│   │   │   └── ClausesList/      # Side panel listing only the flagged clauses
-│   │   └── index.css
-│   └── package.json
-│
-├── notebook52ff91cfb4-2.ipynb      # Kaggle training notebook (see ML section below)
-├── legal_docs_cleaned.csv          # Cleaned training dataset (exported from notebook)
-└── README.md
+│   │   ├── App.tsx               # Root component, type definitions, fetch logic
+│   │   └── components/
+│   │       ├── UploadView/       # Drag-and-drop upload, file preview, demo mode
+│   │       ├── ResultsView/      # Split-pane layout, stats header, summary banner
+│   │       ├── DocumentViewer/   # In-document severity highlighting
+│   │       └── ClausesList/      # Clause cards with severity badges + Explain button
+│   ├── .env.example              # Frontend env variable template
+│   └── vite.config.ts
+├── main.tex                      # IEEE double-column project report
+└── .gitignore
 ```
 
 ---
 
-## The ML Pipeline — How (and Why) It Was Built
+## Model Performance
 
-This section follows the decisions made inside the training notebook, written from the perspective of what was tried, what failed, and why the final approach works.
-
-### 1. The Dataset
-
-Source: **Kaggle — Legal Documents Dataset** (`legal_docs_modified.csv`)
-
-| Column | Description |
-|---|---|
-| `clause_text` | Raw legal clause text |
-| `clause_type` | Category of clause (termination, indemnity, etc.) |
-| `totalwords` | Word count |
-| `totalletters` | Character count |
-| `clause_status` | **Target label** — `0` Normal, `1` Risky |
-
-**Class distribution after cleaning:**
-
-| Label | Count |
-|---|---|
-| 1 — Risky | 12,816 |
-| 0 — Normal | 8,328 |
-
-**Cleaning steps:** Dropped 43 rows with null `clause_text`. Filled missing word/letter counts by recalculating from the text directly. Zero duplicates found.
-
----
-
-### 2. Why We Didn't Use Basic NLP (and What We Tried First)
-
-The notebook went through three approaches before landing on SentenceTransformers. Each failure taught something important.
-
-#### Approach 1 — Standard NLTK + TF-IDF
-
-Standard NLTK stopword removal **deleted legally critical words** like `"no"`, `"not"`, `"under"`, and `"except"`. A clause like `"no more than 45%"` became just `"45%"` — stripping the very constraint that made it risky. The model was eating alphabet soup and couldn't tell the difference between a cap and a permission.
-
-#### Approach 2 — Legal Stopword Rescue List + N-Grams
-
-The fix was to build a custom rescue list — words that NLTK would normally strip but are legally meaningful:
-
-```python
-words_to_keep = {
-    'no', 'not', 'nor', 'except', 'against', 'without', 'only', 'any', 'but',
-    'more', 'than', 'less', 'least', 'greater', 'equal', 'over', 'under', 'above', 'below',
-    'if', 'until', 'while', 'all', 'both', 'each', 'other', 'some', 'such',
-    'prior', 'after', 'before', 'during', 'once', 'can', 'will', 'should', 'a'
-}
-legal_stop_words = stop_words - words_to_keep
-```
-
-Then N-Grams were tried to capture multi-word legal patterns (e.g., treating `"no more than"` as one token). But this is just **dumb pattern memorization** — if a new contract said `"not exceeding"` instead of `"no more than"`, the model completely failed. It couldn't generalize.
-
-#### Approach 3 — Word2Vec
-
-Word2Vec gives every *word* a number, so to score a whole *sentence* you average all the word vectors together. That immediately destroys word order — `"company sues employee"` and `"employee sues company"` produce the **exact same average vector**. In legal text, who does what to whom is critical.
-
-The natural next step would be to pair Word2Vec with an RNN (e.g., LSTM) to preserve sequence order. But that **dramatically increases complexity**: you now need to tune an RNN architecture, pad sequences to equal length, train the full network end-to-end, and manage vanishing gradients — all for a task that already has a better shortcut.
-
-The simpler and more accurate path: use `all-MiniLM-L6-v2` to **generate all embeddings once**, save the resulting 384-dimensional vectors as a feature matrix, and feed that matrix directly into Logistic Regression. The pre-trained transformer already encodes word order, context, and legal semantics internally. From Logistic Regression's perspective it's just a standard classification problem — no sequential training loop required.
-
----
-
-### 3. Final Approach — SentenceTransformers + Logistic Regression
-
-**Why `all-MiniLM-L6-v2`?**
-
-It's a pre-trained BERT-based model that encodes an *entire sentence* into a single 384-dimensional vector that captures **semantic meaning**, context, and word order all at once. The vectors for `"company shall not be liable"` and `"company waives all liability"` end up close to each other in 384-dimensional space, even though they use completely different words — because they *mean* the same thing. No hand-crafted rules required.
-
-**Training code:**
-
-```python
-embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
-X = embedding_model.encode(df['clause_text'].tolist(), show_progress_bar=True)
-y = df['clause_status']
-
-X_train, X_test, y_train, y_test = train_test_split(
-    X, y, test_size=0.2, random_state=42, stratify=y
-)
-
-classifier = LogisticRegression(class_weight='balanced', max_iter=1000)
-classifier.fit(X_train, y_train)
-```
-
-`class_weight='balanced'` was used because the dataset has more risky clauses (12,816) than normal ones (8,328) — this tells the model not to cheat by always predicting the majority class.
-
-**Model performance on the test set:**
+The binary risk classifier was trained on a dataset of **21,144 labelled legal clauses** (12,816 risky, 8,328 normal) using `sentence-transformers/all-MiniLM-L6-v2` embeddings with `class_weight='balanced'` Logistic Regression.
 
 ```
               precision    recall  f1-score   support
@@ -140,131 +116,160 @@ classifier.fit(X_train, y_train)
 
     accuracy                           0.89      4229
    macro avg       0.88      0.89      0.88      4229
-weighted avg       0.89      0.89      0.89      4229
 ```
 
-**89% accuracy** on held-out data. Stronger on risky clauses (F1 = 0.90) than on normal ones (F1 = 0.86), which is the correct trade-off for a risk-detection tool — you'd rather flag something safe than miss something dangerous.
-
-**Sanity check (live test in the notebook):**
-
-```python
-my_fake_clause = "The employee shall assume unlimited liability for all damages, waives all
-rights to legal counsel, and must pay a $500,000 penalty for any breach of this agreement
-without notice."
-
-prediction = classifier.predict(embedding_model.encode([my_fake_clause]))
-# Output: RISKY 
-```
-
-The trained model was saved as `legal_risk_classifier.pkl` using `joblib`.
+**89% accuracy** on held-out data. The classifier deliberately prioritises recall on risky clauses (F1 = 0.90) — it's better to flag a safe clause than to miss a dangerous one.
 
 ---
 
-## Backend API
+## API Reference
 
-Base URL: `http://localhost:8000`
+Base URL (local): `http://localhost:8000`
+Base URL (production): `https://ironwallxr5-specterscan.hf.space`
 
 ### `GET /health`
-Returns `{"status": "healthy"}`. Use this to verify the server is running.
+Liveness probe.
+```json
+{ "status": "healthy", "version": "2.0.0" }
+```
 
 ### `POST /analyze`
-Upload a contract file and receive clause-level risk predictions.
+Upload a contract file and receive a full structured risk report.
 
-**Request:** `multipart/form-data`, field name `file`, accepts `.pdf` or `.txt`
+**Request:** `multipart/form-data`, field `file`, accepts `.pdf` or `.txt`
 
 **Response:**
 ```json
 {
   "filename": "contract.pdf",
-  "total_clauses": 12,
-  "results": [
-    {
-      "clause_index": 1,
-      "clause_text": "The contractor shall not be liable for any damages...",
-      "risk_label": 1,
-      "risk_category": "Risky/Potential Issue"
-    },
-    {
-      "clause_index": 2,
-      "clause_text": "Payment is due within 30 days of invoice.",
-      "risk_label": 0,
-      "risk_category": "Normal/Compliant"
-    }
-  ]
+  "original_text": "...",
+  "report": {
+    "summary": "The contract includes three clauses with elevated risk...",
+    "risks": [
+      {
+        "clause_index": 3,
+        "clause_text": "The Client shall indemnify Provider from all claims...",
+        "severity": "High",
+        "explanation": "This clause places uncapped liability on the client...",
+        "mitigation": "Limit indemnity to third-party claims caused by client negligence..."
+      }
+    ],
+    "disclaimer": "This report is AI-generated and does not constitute legal advice."
+  }
 }
 ```
 
-**Errors:**
-| Status | Reason |
-|---|---|
-| `400` | Unsupported file type (not `.pdf` or `.txt`) |
-| `400` | Empty file or no extractable text |
-| `400` | Corrupted or encrypted PDF |
-| `500` | Internal inference error |
+### `POST /explain_clause`
+On-demand zero-shot LLM explanation for a single clause.
 
-### Interactive Docs
-FastAPI auto-generates a Swagger UI at [`http://localhost:8000/docs`](http://localhost:8000/docs) — you can test the API directly from the browser.
+**Request:**
+```json
+{ "clause_text": "The contractor hereby waives all rights to legal counsel." }
+```
+
+**Response:**
+```json
+{ "explanation": "This clause is risky because it strips the contractor of their legal right to representation..." }
+```
 
 ---
 
-## Setup & Running Locally
+## Running Locally
 
 ### Prerequisites
 - Python 3.10+
 - Node.js 18+
+- A [Pinecone](https://pinecone.io) account with the `specterscan` index populated
+- A [Groq](https://console.groq.com) API key
 
 ### Backend
 
 ```bash
 cd backend
 
-# Create and activate a virtual environment
+# Create and activate virtual environment
 python3 -m venv venv
-source venv/bin/activate          # On Windows: venv\Scripts\activate
+source venv/bin/activate        # Windows: venv\Scripts\activate
 
 # Install dependencies
 pip install -r requirements.txt
 
-# Download the spaCy English language model (one-time setup)
+# Download spaCy model (one-time)
 python -m spacy download en_core_web_sm
 
-# Start the development server
-uvicorn main:app --reload
+# Configure environment
+cp .env.example .env
+# Edit .env and fill in PINECONE_API_KEY and GROQ_API_KEY (+ fallback keys)
+
+# Start the server
+python -m uvicorn main:app --reload
 ```
 
-The API will be live at `http://localhost:8000`.
+> **Important:** Always use `python -m uvicorn` (not bare `uvicorn`) so the subprocess spawned by `--reload` inherits your virtualenv's packages correctly on macOS.
 
-> The first startup will download the `all-MiniLM-L6-v2` SentenceTransformer weights (~90 MB) from HuggingFace. This is cached locally after the first run, so subsequent startups are fast.
+The API will be live at `http://localhost:8000`.
 
 ### Frontend
 
 ```bash
 cd frontend
+
 npm install
+
+# Configure environment
+cp .env.example .env
+# Edit .env — set API_URL=http://localhost:8000 for local dev
+
 npm run dev
 ```
 
-The React app will be live at `http://localhost:5173`.
+The app will be live at `http://localhost:5173`.
 
 ---
 
-## Tech Stack
+## Environment Variables
 
-| Layer | Technology | Why |
+### Backend (`backend/.env`)
+
+| Variable | Required | Description |
 |---|---|---|
-| **Frontend** | React + TypeScript + Vite | Type-safe UI with fast HMR dev server |
-| **Backend** | FastAPI (Python) | Async-first, auto-generates API docs, easy file upload handling |
-| **Embeddings** | `all-MiniLM-L6-v2` via `sentence-transformers` | Lightweight (90MB), fast, semantically powerful |
-| **Classifier** | Scikit-learn Logistic Regression | Interpretable, fast inference, performs well on dense embeddings |
-| **Text Extraction** | PyPDF2 | PDF page-by-page text extraction |
-| **NLP / Segmentation** | spaCy `en_core_web_sm` | Robust sentence boundary detection that handles legal abbreviations |
-| **Model Persistence** | joblib | Standard scikit-learn model serialization |
+| `PINECONE_API_KEY` | ✅ | Pinecone API key for the `specterscan` index |
+| `GROQ_API_KEY` | ✅ | Primary Groq API key |
+| `GROQ_API_KEY_2` | Optional | Fallback key #2 (auto-rotated on rate-limit) |
+| `GROQ_API_KEY_3` | Optional | Fallback key #3 |
+| `GROQ_API_KEY_4` | Optional | Fallback key #4 |
+
+### Frontend (`frontend/.env`)
+
+| Variable | Description |
+|---|---|
+| `API_URL` | Backend base URL (e.g. `https://ironwallxr5-specterscan.hf.space`) |
+
+---
+
+## Deployment
+
+### Hugging Face Spaces (Backend)
+
+The backend runs as a Docker container on Hugging Face Spaces. The `Dockerfile` installs all dependencies, downloads the spaCy model, and starts FastAPI on port 7860.
+
+Add **Repository Secrets** in your Space settings for all environment variables listed above. The `.env` file is gitignored and never committed.
+
+### Vercel (Frontend)
+
+Deploy the `frontend/` directory. Add `API_URL` as an environment variable in the Vercel project settings pointing to your Hugging Face Space URL.
 
 ---
 
 ## Known Limitations
 
-- **Scanned PDFs (images)** — PyPDF2 can only extract digital text. Scanned contracts need OCR (not yet implemented).
-- **One-sided clauses** — The model detects risky-sounding language but cannot reason about *who* the clause benefits. `"indemnify"` in a mutual clause vs. a one-sided one may score the same.
-- **Context-free** — Each clause is classified in isolation. A clause that creates a risky exception to a previous clause may not be flagged.
-- **sklearn version warning** — The model was saved on sklearn 1.6.1. Running it on 1.8.0 generates a warning but works correctly for Logistic Regression.
+- **Scanned PDFs** — PyPDF2 only extracts digital text. Image-based PDFs require OCR (not yet implemented).
+- **Context-free classification** — Each clause is classified independently. Exceptions or cross-references between clauses are not modelled.
+- **Single-document scope** — The system analyses one contract at a time. Batch processing is not supported.
+- **LLM latency** — Cold-started Groq calls may take 3–8 seconds for structured synthesis on long contracts.
+
+---
+
+## License
+
+MIT
